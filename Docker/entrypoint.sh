@@ -15,6 +15,70 @@ shutdown () {
     kill -2 $valheim_pid
 }
 
+update_server () {
+    steamcmd.sh +@sSteamCmdForcePlatformType windows +force_install_dir "${SERVER}" \
+        +login anonymous +app_info_update 1 +app_update 896660 validate +quit
+}
+
+has_denied_installed_manifest () {
+    local manifest=$1
+    local content_log=$2
+    local previous_inode=$3
+    local previous_size=$4
+    local inode size
+
+    [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
+    read -r inode size < <(stat -c '%d:%i %s' -- "$content_log" 2>/dev/null) || return 1
+    [[ -z "$previous_inode" || "$inode" == "$previous_inode" ]] || return 1
+    (( size > previous_size )) || return 1
+
+    # Require a successful request for a different manifest in the same depot
+    # before treating the denied installed manifest as stale.
+    tail -c "+$((previous_size + 1))" -- "$content_log" |
+        awk -F '"' '
+            FILENAME == "-" {
+                if ($0 ~ /manifest request received 200 [(]OK[)]/ &&
+                    match($0, /depot\/[0-9]+\/manifest\/[0-9]+\//)) {
+                    split(substr($0, RSTART, RLENGTH), fields, "/")
+                    if ((fields[2] in available) && available[fields[2]] != "id:" fields[4])
+                        multiple_available[fields[2]] = 1
+                    available[fields[2]] = "id:" fields[4]
+                }
+                if (match($0, /App: 896660, Depot: [0-9]+, Manifest: [0-9]+, branch: .*Failed to get manifest request code, .*Access Denied/)) {
+                    split(substr($0, RSTART, RLENGTH), fields, /[ ,]+/)
+                    denied[fields[4], fields[6]] = 1
+                }
+                if ($0 ~ /AppID 896660 update canceled : Failed downloading [0-9]+ manifests? /)
+                    manifest_download_failed = 1
+                next
+            }
+            /^[[:space:]]*\{/ { depth++; next }
+            /^[[:space:]]*\}/ {
+                depth--
+                if (depth < 2) installed_depots = 0
+                next
+            }
+            depth == 1 { installed_depots = ($2 == "InstalledDepots") }
+            installed_depots && depth == 2 { depot = $2 }
+            installed_depots && depth == 3 && $2 == "manifest" && (depot, $4) in denied {
+                if (multiple_available[depot] || ((depot in available) && available[depot] != "id:" $4))
+                    stale_manifest = 1
+            }
+            END { exit !(manifest_download_failed && stale_manifest) }
+        ' - "$manifest"
+}
+
+recover_server_update () {
+    local manifest="${SERVER}/steamapps/appmanifest_896660.acf"
+    local backup_dir
+
+    has_denied_installed_manifest "$manifest" "$@" || return 1
+    backup_dir=$(mktemp -d -- "${manifest}.backup.XXXXXX") || return 1
+    mv -T -- "$manifest" "${backup_dir}/${manifest##*/}" || return 1
+    echo "$(timestamp) INFO: Backed up the stale Steam manifest to ${backup_dir}/${manifest##*/}. Retrying the update."
+    update_server
+}
+
 # Set our trap
 trap 'shutdown' TERM
 
@@ -25,8 +89,15 @@ echo " "
 /print_app_versions.sh
 
 echo "Update"
-if ! steamcmd.sh +@sSteamCmdForcePlatformType windows +force_install_dir "${SERVER}" \
-        +login anonymous +app_info_update 1 +app_update 896660 validate +quit; then
+content_log=/root/Steam/logs/content_log.txt
+content_log_inode=
+content_log_size=0
+if [[ -e "$content_log" ]]; then
+    read -r content_log_inode content_log_size < <(stat -c '%d:%i %s' -- "$content_log") ||
+        content_log_size=-1
+fi
+if ! update_server &&
+    ! { (( content_log_size >= 0 )) && recover_server_update "$content_log" "$content_log_inode" "$content_log_size"; }; then
     echo "$(timestamp) ERROR: SteamCMD failed to install or update the Valheim dedicated server" >&2
     exit 1
 fi
