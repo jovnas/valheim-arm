@@ -25,8 +25,15 @@ echo " "
 /print_app_versions.sh
 
 echo "Update"
-export SteamAppId=892970
-steamcmd.sh +@sSteamCmdForcePlatformType windows +force_install_dir ${SERVER} +login anonymous +app_update 896660 validate +quit
+if ! steamcmd.sh +@sSteamCmdForcePlatformType windows +force_install_dir "${SERVER}" \
+        +login anonymous +app_info_update 1 +app_update 896660 validate +quit; then
+    echo "$(timestamp) ERROR: SteamCMD failed to install or update the Valheim dedicated server" >&2
+    exit 1
+fi
+if [[ ! -f "${SERVER}/valheim_server.exe" ]]; then
+    echo "$(timestamp) ERROR: Valheim server executable is missing after SteamCMD update" >&2
+    exit 1
+fi
 
 echo "Checking if BepInEx files need to be copied"
 mkdir -p "${SERVER}"
@@ -83,6 +90,7 @@ fi
 mkdir -p "${PERSISTENT}/logs"
 LOG_FILE="${PERSISTENT}/logs/valheim_$(date '+%d-%m-%Y').log"
 
+export SteamAppId=892970
 wine valheim_server.exe \
     -name "$SERVER_NAME" \
     -port 2456 \

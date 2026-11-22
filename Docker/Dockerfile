@@ -1,10 +1,13 @@
-FROM tsxcloud/steamcmd-wine-ntsync:latest
+ARG BASE_IMAGE=tsxcloud/steamcmd-wine-ntsync:latest
+FROM ${BASE_IMAGE}
 
 RUN apt update
 RUN apt install -y \
+        kmod \
         libatomic1 \
         libpulse-dev \
-        libpulse0
+        libpulse0 \
+        lsof
 
 ENV ENABLE_PLUGINS="false"
 ENV SERVER_NAME="Valheim_Server"

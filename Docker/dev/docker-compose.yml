@@ -3,6 +3,8 @@ services:
     build:
       context: ../
       dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: "${BASE_IMAGE:-tsxcloud/steamcmd-wine-ntsync:latest}"
     restart: unless-stopped
     ports:
       - "2456:2456/udp"
